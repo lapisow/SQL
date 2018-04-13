@@ -1,0 +1,119 @@
+﻿cls
+ # Get-Date -Format 'yyyyMMddHHmmss' >C:\backups\TIMETXT.txt
+
+        $return=@()
+        
+        $servercon = New-Object System.Data.SqlClient.SqlConnection
+        $servercon.ConnectionString = "Data Source=P-DBAU1-V;Initial Catalog=master;Integrated Security=true;"
+        $servercmd = New-Object System.Data.SqlClient.SqlCommand
+        $servercmd.Connection = $servercon
+        #$servercmd.CommandText = "SELECT top 10 InstanceName FROM DBA.dbo.view_SQLServerInstances where Environment ='QA' AND State = 'Running'"
+        $servercmd.CommandText = "SELECT distinct  vw.[InstanceName] FROM [DBA].[dbo].[view_SQLServerInstances] vw
+                                  where vw.Started ='True'	
+                                  AND vw.[StartMode] !='Disabled'
+                                  AND vw.State ='Running'
+                                  and vw.Environment='PROD'
+                                  and vw.ServerName not  in  (
+                                                   SELECT   dc.[Decom_servers]
+                                                  FROM [DBAutil].[dbo].[Decommission_server_List] dc)
+                                                  Order by  vw.[InstanceName];
+                               "
+        $servercmd.CommandTimeout = 0
+        
+      # Write-Warning $servercmd.CommandText
+        try
+        {
+            $servercon.Open()
+       
+                $read = $servercmd.ExecuteReader()
+    
+            while ($read.Read())
+            {
+                $dbserver = $read["InstanceName"]
+                 
+              Write-Host  $dbserver  # you can comment if you schedule this 
+
+             
+               $sqlcmd= ";with minmemory as(
+                            SELECT  @@SERVERNAME  as SERVER_NAME,
+	
+	                            name, 
+	                            minimum, 
+	                            maximum, 
+	                            value_in_use, 
+	                            value as value_configured
+                            FROM master.sys.configurations
+                            WHERE name IN ('min server memory (MB)')
+                            )
+                            , maxmemory as
+                             (
+                              SELECT  @@SERVERNAME  as SERVER_NAME,
+	
+	                            name, 
+	                            minimum, 
+	                            maximum, 
+	                            value_in_use, 
+	                            value as value_configured
+                            FROM master.sys.configurations
+                            WHERE name IN ('max server memory (MB)')
+                             )
+                             SELECT @@SERVERNAME AS SERVER_NAME, total_physical_memory_kb/1024 as total_physical_memory_mb, mn.value_configured as min_value_config,   mx.value_configured as max_value_config 
+                             from minmemory mn join maxmemory mx on mn.SERVER_NAME=mx.SERVER_NAME
+                             join sys.dm_os_sys_memory on mx.SERVER_NAME =@@SERVERNAME
+                            "
+                #Invoke-Sqlcmd -ServerInstance $instance -Database tempdb -Query $sqlcmd -ErrorAction Stop -ConnectionTimeout 2
+
+
+
+                  try{
+                  $row = New-Object -TypeName Psobject -Property @{'InstanceName'=$dbserver; 'total_physical_memory_mb' = $null;'min_value_config'=$null;'max_value_config'=$null}
+                  $check = Invoke-Sqlcmd -ServerInstance $dbserver -Database tempdb -Query $sqlcmd -ErrorAction Stop -ConnectionTimeout 0
+                  $row.instancename =$check.SERVER_NAME
+                  $row.total_physical_memory_mb = $check.total_physical_memory_mb
+                  $row.min_value_config = $check.min_value_config
+                  $row.max_value_config = $check.max_value_config
+
+                  }
+                  catch {
+                  # do nothing
+               
+                  }
+                  finally {
+                  $return+= $row 
+                  }
+
+              }
+        }
+        catch
+        {
+            Write-Warning "Read-Servers Error " #>>"D:\Replication_MAP\Error_log_SQL_JOBNew.txt"
+             $ex = $_.Exception 
+           Write-Error "$ex.Message" 
+           continue 
+           # Write-Warning $_
+        }
+        finally {
+    [string[]]$body = $null
+    if($return){
+        $body += $($return|Select-Object 'InstanceName','total_physical_memory_mb','min_value_config','max_value_config' | ConvertTo-HTML | foreach {if($_ -like "<title>*</title>"){'<style>table{color:black;text-align:left;font-size:12px;border:2px solid black;border-collapse: collapse;}th{background-color:cornflowerblue;border:2px solid black;padding:5px;}td{border-right:2px solid black;padding:5px;border-top: 1px solid black;}</style>'}else{$_}})
+       
+           
+        $fromaddress = "fkassa@swbc.com" 
+        $toaddress = "fkassa@swbc.com"  
+        $Subject = "Server Min and Max Memory Configuration" 
+        $smtpserver = "smtp.swbc.local" 
+ 
+        #################################### 
+ 
+        $message = new-object System.Net.Mail.MailMessage 
+        $message.From = $fromaddress 
+        $message.To.Add($toaddress) 
+        $message.IsBodyHtml = $True 
+        $message.Subject = $Subject 
+        $message.body = $body 
+        $smtp = new-object Net.Mail.SmtpClient($smtpserver) 
+        $smtp.Send($message) 
+        $servercmd.Dispose()
+        $servercon.Dispose()
+    }
+}

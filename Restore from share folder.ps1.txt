@@ -1,0 +1,55 @@
+﻿ ##create a point in time restore
+
+ $serverName ="D-DBUTIL3"
+ $dbs ="ACHTrans"
+
+Set-Location '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\'
+
+if ('\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\FULL\*.bak'){
+$lastfullbk =Get-ChildItem '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\FULL\*.bak' |Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$lastfullbk.FullName
+
+
+}
+
+if('\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\DIFF\*.bak'){
+$lastdifbk =Get-ChildItem '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\DIFF\*.bak' |where-Object {$_.LastWriteTime -gt $lastfullbk.LastWriteTime} |Sort-Object LastWriteTime -Descending | Select-Object -First 1
+#$lastdifbk2 =Get-ChildItem '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\DIFF\*.bak' |where-Object {$_.LastWriteTime -gt $lastfullbk.LastWriteTime} |Sort-Object LastWriteTime -Descending | Select-Object -First 2
+}
+
+$lastdifbk.FullName
+#$lastdifbk2.FullName[3]
+
+
+if('\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\LOG\*.trn' ){
+        if ($lastdifbk){
+                $Logs =Get-ChildItem '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\LOG\*.trn' |where-Object {($_.LastWriteTime -gt $lastdifbk.LastWriteTime) }| Sort-Object LastWriteTime
+                #$Logs =Get-ChildItem '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\LOG\*.trn' |where-Object {($_.LastWriteTime -gt $lastdifbk[3].LastWriteTime) -and ($_.LastWriteTime -lt $lastdifbk[2].LastWriteTime)}| Sort-Object LastWriteTime
+            } 
+         else{
+
+            if('\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\LOG\*.trn'){
+            $Logs =Get-ChildItem '\\swbc.local\backups\DBProdDZ3\P-AGECM1\P-DBECM$P-ECMAG1\ACHTrans\LOG\*.trn' |where-Object {($_.LastWriteTime -gt $lastfullbk.LastWriteTime) }| Sort-Object LastWriteTime
+          }
+       }
+}
+
+$Logs 
+
+
+Restore-SqlDatabase -ServerInstance $serverName -Database $dbs  -BackupFile  $lastfullbk.FullName -RestoreAction Database -NoRecovery -Script |Out-File C:\backups\ECMRestore.sql
+Restore-SqlDatabase -ServerInstance $serverName -Database $dbs  -BackupFile  $lastdifbk.FullName -RestoreAction Database -NoRecovery -Script |Out-File C:\backups\ECMRestore.sql  -Append
+foreach($log in $logs) {
+
+      if($Log -eq $logs[$logs.length -1]){
+
+   
+Restore-SqlDatabase -ServerInstance $serverName -Database $dbs  -BackupFile  $log.FullName -RestoreAction Log -Script |Out-File C:\backups\ECMRestore.sql -Append
+           }
+      Else{
+       Restore-SqlDatabase -ServerInstance $serverName -Database $dbs  -BackupFile  $log.FullName -RestoreAction Log -NoRecovery -Script |Out-File C:\backups\ECMRestore.sql -Append
+          }
+
+}
+
+

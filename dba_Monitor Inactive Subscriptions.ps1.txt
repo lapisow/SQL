@@ -1,0 +1,132 @@
+﻿$debug = $true
+If($debug){Clear-Host}
+
+$sqlcmd ="if (object_id(N'tempdb.dbo.#tmp_publication') is not null)
+drop table #tmp_publication  
+CREATE TABLE #tmp_publication(
+       [publication server] [nvarchar](128) NULL,
+       [publication database] [nvarchar](128) NULL,
+       [publication name] [sysname] NOT NULL,
+       [publication table] [sysname] NOT NULL,
+       [Publication status] [nvarchar](128) NULL,
+       [subscription server] [sysname] NOT NULL,
+       [subscription database] [sysname] NOT NULL,
+       [subscription table] [sysname] NOT NULL,
+       [subscription status] [nvarchar](128) NULL
+)
+
+exec sp_MSforeachdb '
+use [?]
+
+declare @is_published sysname
+select @is_published=is_published from sys.databases where name =db_name()
+
+if (@is_published =1) and (object_id(N''dbo.syssubscriptions'') is not null)
+begin 
+    insert into #tmp_publication
+    SELECT 
+        @@SERVERNAME as [publication server]
+        ,db_name() as [publication database]
+        ,pub.[name] as [publication name]
+        ,artv.[name] as [publication table]
+        ,case
+            when pub.[status] =0 then ''Inactive''
+            when pub.[status] =1 then ''Active''
+            end as [publication status]
+        
+        ,sub.srvname as [subscription server]
+        ,sub.dest_db as [subscription database]
+        ,artv.dest_table as [subscription table]
+              
+        ,case 
+            when sub.[status] =0 Then ''Inactive'' 
+            when sub.[status] =1 then ''Subscribed'' 
+            when sub.[status] =2 then ''Active''
+            end as [subscription status]     
+    FROM dbo.syssubscriptions sub
+    JOIN dbo.sysextendedarticlesview artv ON sub.artid = artv.artid
+    JOIN dbo.syspublications pub ON artv.pubid = pub.pubid
+    WHERE sub.srvid > 0
+    AND (sub.[status] != 2 or pub.[status] !=1)
+end
+'
+select * from #tmp_publication
+"
+
+$return=@()
+        
+$servercon = New-Object System.Data.SqlClient.SqlConnection
+$servercon.ConnectionString = "Data Source=P-DBAU1-V;Initial Catalog=master;Integrated Security=true;"
+$servercmd = New-Object System.Data.SqlClient.SqlCommand
+$servercmd.Connection = $servercon
+
+$servercmd.CommandText = "  SELECT DISTINCT  [InstanceName] FROM [DBA].[dbo].[view_SQLServerInstances]
+                            WHERE Started ='True'  
+                            AND [StartMode] !='Disabled'
+                            AND [State] ='Running'
+                            AND [Environment] ='Prod'
+                           -- AND [InstanceName] ='p-dbdt3'
+                            AND [ServerName] not in (SELECT [Decom_servers] FROM [DBAutil].[dbo].[Decommission_server_List])
+                            ORDER BY [InstanceName];
+                        "
+$servercmd.CommandTimeout = 0
+        
+# Write-Warning $servercmd.CommandText
+try {
+    $servercon.Open()
+       
+    $read = $servercmd.ExecuteReader()
+    
+    while ($read.Read()) {
+        $dbserver = $read["InstanceName"]
+
+        try{
+            $checkRepl = Invoke-Sqlcmd -ServerInstance $dbserver -Database master -Query $sqlcmd -ErrorAction Stop -ConnectionTimeout 0 
+
+            if($checkRepl){
+                $i=$checkRepl.Count
+                If($debug){Write-Host " $dbserver  #articles inactive $i"}                       
+     
+                for ($k =0; $k -lt $i; $k++){
+                    $return += $checkRepl[$k]
+                }
+                           
+            } else {
+                If($debug){Write-Host " $dbserver  #articles inactive 0"}
+            }
+        } catch {
+        # do nothing
+            If($debug){Write-Host " server $dbserver unable to connect  "}
+            continue    
+        }
+
+    }
+} catch {
+    If($debug){Write-Host "Read-Servers Error "} #>>"D:\Replication_MAP\Error_log_SQL_JOBNew.txt"
+    $ex = $_.Exception 
+    If($debug){Write-Host "$ex.Message" }
+    continue 
+} finally {
+    [string[]]$body = $null
+    if($return){
+        $body += $($return|Select-Object 'publication server','publication database','publication name','publication table','publication status','subscription server','subscription database','subscription table','subscription status' | ConvertTo-HTML | foreach {if($_ -like "<title>*</title>"){'<style>table{color:black;text-align:left;font-size:12px;border:2px solid black;border-collapse: collapse;}th{background-color:cornflowerblue;border:2px solid black;padding:5px;}td{border-right:2px solid black;padding:5px;border-top: 1px solid black;}</style>'}else{$_}})
+         
+        $fromaddress = "DBASupport@swbc.com" 
+        $toaddress = "fkassa@swbc.com"  
+        $Subject = "Suspect Replication Status" 
+        $smtpserver = "smtp.swbc.local" 
+ 
+        #################################### 
+ 
+        $message = new-object System.Net.Mail.MailMessage 
+        $message.From = $fromaddress 
+        $message.To.Add($toaddress) 
+        $message.IsBodyHtml = $True 
+        $message.Subject = $Subject 
+        $message.body = $body 
+        $smtp = new-object Net.Mail.SmtpClient($smtpserver) 
+        $smtp.Send($message) 
+        $servercmd.Dispose()
+        $servercon.Dispose()
+    }
+}

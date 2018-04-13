@@ -1,0 +1,288 @@
+﻿
+Import-Module sqlps
+####################### 
+
+function Invoke-Sqlcmd2 
+{ 
+    [CmdletBinding()] 
+    param( 
+    [Parameter(Position=0, Mandatory=$true)] [string]$ServerInstance, 
+    [Parameter(Position=1, Mandatory=$false)] [string]$Database, 
+    [Parameter(Position=2, Mandatory=$false)] [string]$Query, 
+    [Parameter(Position=3, Mandatory=$false)] [string]$Username, 
+    [Parameter(Position=4, Mandatory=$false)] [string]$Password, 
+    [Parameter(Position=5, Mandatory=$false)] [Int32]$QueryTimeout=600, 
+    [Parameter(Position=6, Mandatory=$false)] [Int32]$ConnectionTimeout=15, 
+    [Parameter(Position=7, Mandatory=$false)] [ValidateScript({test-path $_})] [string]$InputFile, 
+    [Parameter(Position=8, Mandatory=$false)] [ValidateSet("DataSet", "DataTable", "DataRow")] [string]$As="DataRow" 
+    ) 
+ 
+    if ($InputFile) 
+    { 
+        $filePath = $(resolve-path $InputFile).path 
+        $Query =  [System.IO.File]::ReadAllText("$filePath") 
+    } 
+ 
+    $conn=new-object System.Data.SqlClient.SQLConnection 
+      
+    if ($Username) 
+    { $ConnectionString = "Server={0};Database={1};User ID={2};Password={3};Trusted_Connection=False;Connect Timeout={4}" -f $ServerInstance,$Database,$Username,$Password,$ConnectionTimeout } 
+    else 
+    { $ConnectionString = "Server={0};Database={1};Integrated Security=True;Connect Timeout={2}" -f $ServerInstance,$Database,$ConnectionTimeout } 
+ 
+    $conn.ConnectionString=$ConnectionString 
+     
+    #Following EventHandler is used for PRINT and RAISERROR T-SQL statements. Executed when -Verbose parameter specified by caller 
+   <# if ($PSBoundParameters.Verbose) 
+    { 
+        $conn.FireInfoMessageEventOnUserErrors=$true 
+        $handler = [System.Data.SqlClient.SqlInfoMessageEventHandler] {Write-Verbose "$($_)"} 
+        $conn.add_InfoMessage($handler) 
+    } #>
+  try {
+
+    $conn.Open() 
+    $cmd=new-object system.Data.SqlClient.SqlCommand($Query,$conn) 
+    $cmd.CommandTimeout=$QueryTimeout 
+    $ds=New-Object system.Data.DataSet 
+    $da=New-Object system.Data.SqlClient.SqlDataAdapter($cmd) 
+      #Get-Date >>"S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\connected_JOBNew.txt" 
+      #$ServerInstance >>"S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\connected_JOBNew.txt" 
+    [void]$da.fill($ds) 
+    $conn.Close() 
+    switch ($As) 
+    { 
+        'DataSet'   { Write-Output ($ds) } 
+        'DataTable' { Write-Output ($ds.Tables) } 
+        'DataRow'   { Write-Output ($ds.Tables[0]) } 
+    } 
+ }
+
+catch {
+        $err = $Error[0].Exception ;
+        "Error caught:"  + ' Unable to connect to the server :' + $ServerInstance  >>"S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\Error_log_SQL_JOBNew.txt"
+        ##>>C:\Users\Fikre.Kassa\powershell\SQL\Error_log_SQL_JOB.txt
+        ##>>S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\Error_log_Beta_QA_Dev.txt
+        #$err.Message  >>"S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\Error_log_SQL_JOBNew.txt" ;
+        continue ;
+}
+} 
+#Invoke-Sqlcmd2------------------------------------------
+
+
+
+####################### 
+
+function Write-DataTable 
+{ 
+    [CmdletBinding()] 
+    param( 
+    [Parameter(Position=0, Mandatory=$true)] [string]$ServerInstance, 
+    [Parameter(Position=1, Mandatory=$true)] [string]$Database, 
+    [Parameter(Position=2, Mandatory=$true)] [string]$TableName, 
+    [Parameter(Position=3, Mandatory=$true)] $Data, 
+    [Parameter(Position=4, Mandatory=$false)] [string]$Username, 
+    [Parameter(Position=5, Mandatory=$false)] [string]$Password, 
+    [Parameter(Position=6, Mandatory=$false)] [Int32]$BatchSize=50000, 
+    [Parameter(Position=7, Mandatory=$false)] [Int32]$QueryTimeout=0, 
+    [Parameter(Position=8, Mandatory=$false)] [Int32]$ConnectionTimeout=15 
+    ) 
+     
+    $conn=new-object System.Data.SqlClient.SQLConnection 
+ 
+    if ($Username) 
+    { $ConnectionString = "Server={0};Database={1};User ID={2};Password={3};Trusted_Connection=False;Connect Timeout={4}" -f $ServerInstance,$Database,$Username,$Password,$ConnectionTimeout } 
+    else 
+    { $ConnectionString = "Server={0};Database={1};Integrated Security=True;Connect Timeout={2}" -f $ServerInstance,$Database,$ConnectionTimeout } 
+ 
+    $conn.ConnectionString=$ConnectionString 
+ 
+    try 
+    { 
+        $conn.Open() 
+        $bulkCopy = new-object ("Data.SqlClient.SqlBulkCopy") $connectionString 
+        $bulkCopy.DestinationTableName = $tableName 
+        $bulkCopy.BatchSize = $BatchSize 
+        $bulkCopy.BulkCopyTimeout = $QueryTimeOut 
+        $bulkCopy.WriteToServer($Data) 
+        $conn.Close() 
+    } 
+    catch 
+    { 
+        $ex = $_.Exception 
+        Write-Error "$ex.Message" 
+        continue 
+    } 
+ 
+} 
+#Write-DataTable -----------------------
+
+#Get-Date >>"S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\Error_log_SQL_JOBNew.txt"
+#$srvlist = @(get-content "S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\prod.txt")
+
+
+
+
+
+
+        $servercon = New-Object System.Data.SqlClient.SqlConnection
+        $servercon.ConnectionString = "Data Source=P-DBAU1-V;Initial Catalog=master;Integrated Security=true;"
+        $servercmd = New-Object System.Data.SqlClient.SqlCommand
+        $servercmd.Connection = $servercon
+        #$servercmd.CommandText = "SELECT    [InstanceName]  FROM [DBA].[dbo].[view_SQLServerInstances] where State='Running'"
+
+         $servercmd.CommandText = "SELECT distinct  vw.[InstanceName] FROM [DBA].[dbo].[view_SQLServerInstances] vw
+                                  where vw.Started ='True'	
+                                  AND vw.[StartMode] !='Disabled'
+                                  AND vw.State ='Running'
+                                  --and vw.Environment='PROD'
+                                  and vw.ServerName not  in  (
+                                                   SELECT   dc.[Decom_servers]
+                                                  FROM [DBAutil].[dbo].[Decommission_server_List] dc)
+                                                  Order by  vw.[InstanceName];
+                               "
+
+
+
+#$servercmd.CommandText = "SELECT  distinct  S.[INSTANCENAME]
+ # FROM [DBA].[dbo].[Instance_sunday] S  JOIN [DBA].[dbo].[view_SQLServerInstances] V ON S.[INSTANCENAME] =v.[InstanceName]
+  #WHERE s.state='Running'"
+
+
+
+        $servercmd.CommandTimeout = 0
+        
+      # Write-Warning $servercmd.CommandText
+        try
+        {
+            $servercon.Open()
+       
+                $read = $servercmd.ExecuteReader()
+    
+            while ($read.Read())
+            {
+                $dbserver = $read["InstanceName"]
+
+              #  $dbserver ='P-DBAU1-V'
+
+         #Write-HOST  " read  $dbserver " 
+           #  $dbserver >> "S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\listofServerNODE.csv" 
+
+$dt = Invoke-Sqlcmd2 -ServerInstance $dbserver -Database master "
+
+
+------------------------------------------------
+
+USE [master]
+
+IF OBJECT_ID('TEMPDB..#Availability_Group_node') IS NOT NULL
+		DROP TABLE #Availability_Group_node
+
+
+CREATE TABLE #Availability_Group_node(
+	[Availability_Group_Name] [sysname] NULL,
+	[SQ_cluster_node_name] [nvarchar](256) NOT NULL,
+	[Replica_Role] [nvarchar](60) NULL,
+	[Listener_Name] [nvarchar](63) NULL,
+	[failure_condition_level] [int] NULL,
+	[health_check_timeout] [int] NULL,
+	[automated_backup_preference_desc] [nvarchar](60) NULL,
+	[connected_state_desc] [nvarchar](60) NULL,
+	[synchronization_health_desc] [nvarchar](60) NULL,
+	[last_connect_error_number] [int] NULL,
+	[last_connect_error_description] [nvarchar](1024) NULL,
+	[last_connect_error_timestamp] [datetime] NULL,
+	[port] [int] NULL,
+	[ip_configuration_string_from_cluster] [nvarchar](4000) NULL,
+	[VersionString] [varchar](128) NULL,
+	[Version_Name] [varchar](18) NULL,
+	[Edition] [sysname] NULL,
+	[ProductLevel] [sysname] NULL,
+	[CollectionDate] [datetime] NOT NULL,
+   [emailed] bit default 0
+) 
+
+
+IF SERVERPROPERTY ('IsHadrEnabled') = 1
+	IF EXISTS  (SELECT role_desc  from sys.dm_hadr_availability_replica_states
+						WHERE role_desc = 'PRIMARY'
+						)
+		
+BEGIN
+Insert into  #Availability_Group_node
+SELECT
+   AGC.name [Availability_Group_Name]
+ , RCS.replica_server_name [SQ_cluster_node_name]
+ , ARS.role_desc  [Replica_Role]
+ , AGL.dns_name  [Listener_Name]
+ ,failure_condition_level	
+ ,health_check_timeout	
+ ,automated_backup_preference_desc
+ ,connected_state_desc
+ ,synchronization_health_desc
+ ,last_connect_error_number	
+ ,last_connect_error_description	
+ ,last_connect_error_timestamp
+ ,port
+,ip_configuration_string_from_cluster
+,CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(128)) AS [VersionString],
+ CASE 
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =14)  THEN 'SQL Server 2017'
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =13)  THEN 'SQL Server 2016'
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =12)  THEN 'SQL Server 2014'
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =11)  THEN 'SQL Server 2012'
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =10)  THEN 
+    CASE 
+      WHEN ((SELECT SUBSTRING(cast(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)), 4,2))='50') THEN 'SQL Server 2008 R2'
+	  ELSE 'SQL Server 2008'
+   END  
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =9)  THEN 'SQL Server 2005'
+  WHEN  ((SELECT  LEFT(CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),CHARINDEX('.',CAST(SERVERPROPERTY(N'ProductVersion') AS VARCHAR(25)),1)-1)) =8)  THEN 'SQL Server 2000'
+  END AS Version_Name,
+
+CAST(SERVERPROPERTY(N'Edition') AS sysname) AS [Edition],
+CAST(SERVERPROPERTY(N'ProductLevel') AS sysname) AS [ProductLevel],
+getdate() CollectionDate,
+0 as emailed
+
+
+FROM
+ sys.availability_groups_cluster AS AGC
+  INNER JOIN sys.dm_hadr_availability_replica_cluster_states AS RCS
+   ON
+    RCS.group_id = AGC.group_id
+  INNER JOIN sys.dm_hadr_availability_replica_states AS ARS
+   ON
+    ARS.replica_id = RCS.replica_id
+  INNER JOIN sys.availability_group_listeners AS AGL
+   ON
+    AGL.group_id = ARS.group_id
+--WHERE
+--ARS.role_desc = 'PRIMARY'
+
+END
+
+select * from #Availability_Group_node
+
+
+
+"
+  if ($dt) {
+
+Write-DataTable -ServerInstance "P-DBAU1-V" –Database DBAutil –TableName "Availability_Group_node" -Data $dt
+}
+
+        }
+        }
+        catch
+        {
+          #  Write-Warning "Read-Servers Error2 " >>"S:\MSSQL_SYS\MSSQL13.MSSQLSERVER\MSSQL\Log\Error_log_SQL_JOBNew.txt"
+          # Write-Warning $_
+        }
+        finally
+        {
+            $servercmd.Dispose()
+            $servercon.Dispose()
+        }
+        
+

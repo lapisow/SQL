@@ -1,0 +1,159 @@
+﻿$debug = $true
+If($debug){Clear-Host}
+
+$sqlcmd ="
+IF SERVERPROPERTY ('IsHadrEnabled') = 1
+	IF EXISTS  (SELECT role_desc  from sys.dm_hadr_availability_replica_states
+						WHERE role_desc = 'PRIMARY'
+						)
+		
+BEGIN
+
+if (object_id(N'tempdb.dbo.#tmp_AG_Health') is not null)
+drop table #tmp_AG_Health  
+CREATE TABLE #tmp_AG_Health(
+    [replica_server_name] [nvarchar](256) NOT NULL,
+	[database_name] [nvarchar](128) NULL,
+	[role_desc] [nvarchar](60) NULL,
+	[connected_state_desc] [nvarchar](60) NULL,
+	[Replica_health] [nvarchar](60) NULL,
+	[synchronization_state_desc] [nvarchar](60) NULL,
+	[Database_health] [nvarchar](60) NULL,
+	[Is_suspended] [varchar](3) NOT NULL,
+	[is_failover_ready] [varchar](3) NOT NULL,
+	[is_pending_secondary_suspend] [varchar](3) NOT NULL,
+	[is_database_joined] [varchar](3) NOT NULL
+)
+
+insert into #tmp_AG_Health
+SELECT  
+
+arcs.replica_server_name,
+drcs.database_name,
+
+ars.role_desc,
+ars.connected_state_desc	,
+ars.synchronization_health_desc as Replica_health,
+
+drs.synchronization_state_desc  ,	
+drs.synchronization_health_desc as Database_health,
+	case 
+	  when drs.Is_suspended =0 then 'No'
+	  else 'Yes'
+	end  Is_suspended, 
+     case 
+	  when drcs.is_failover_ready =1 then 'Yes'
+	  else 'No'
+	end  is_failover_ready,
+    case 
+	  when drcs.is_pending_secondary_suspend =0 then 'No'
+	  else 'Yes'
+	end  is_pending_secondary_suspend,
+    case 
+	  when drcs.is_database_joined =1 then 'Yes'
+	  else 'No'
+	end  is_database_joined 
+FROM  sys.dm_hadr_database_replica_cluster_states   drcs
+join  sys.dm_hadr_database_replica_states drs on drcs.replica_id=drs.replica_id and drcs.group_database_id=drs.group_database_id
+join sys.dm_hadr_availability_replica_states	 ars on  drs.replica_id=ars.replica_id and drs.group_id=ars.group_id
+join sys.dm_hadr_availability_replica_cluster_states arcs on  arcs.replica_id=ars.replica_id and arcs.group_id=ars.group_id
+where 1=1
+--and drs.is_commit_participant <>1
+and (arcs.join_state <>1
+OR ars.synchronization_health<>2
+OR ars.connected_state<>1
+OR drs.is_suspended<>0
+OR drs.synchronization_health<>2
+--OR drs.synchronization_state<>2
+OR drcs.is_database_joined<>1
+OR drcs.is_pending_secondary_suspend<>0
+--or drs.is_commit_participant =1
+--OR drcs.is_failover_ready<>1
+)
+
+select * from #tmp_AG_Health
+END
+"
+
+$return=@()
+        
+$servercon = New-Object System.Data.SqlClient.SqlConnection
+$servercon.ConnectionString = "Data Source=P-DBAU1-V;Initial Catalog=master;Integrated Security=true;"
+$servercmd = New-Object System.Data.SqlClient.SqlCommand
+$servercmd.Connection = $servercon
+
+$servercmd.CommandText = "SELECT distinct  vw.[InstanceName] FROM [DBA].[dbo].[view_SQLServerInstances] vw
+                                  where vw.Started ='True'	
+                                  AND vw.[StartMode] !='Disabled'
+                                  AND vw.State ='Running'
+                                  and vw.Environment !='PROD'
+                                  --AND vw.[InstanceName] ='SWBC-DMCPI'
+                                  and vw.ServerName not  in  (
+                                                   SELECT   dc.[Decom_servers]
+                                                  FROM [DBAutil].[dbo].[Decommission_server_List] dc)
+                                                  Order by  vw.[InstanceName];
+                               "
+$servercmd.CommandTimeout = 0
+        
+# Write-Warning $servercmd.CommandText
+try {
+    $servercon.Open()
+       
+    $read = $servercmd.ExecuteReader()
+    
+    while ($read.Read()) {
+        $dbserver = $read["InstanceName"]
+
+        try{
+        #$dbserver="d-dbutil3"
+            $checkRepl = Invoke-Sqlcmd -ServerInstance $dbserver -Database master -Query $sqlcmd -ErrorAction Stop -ConnectionTimeout 0 
+
+            if($checkRepl){
+                $i=$checkRepl.Count
+                If($debug){Write-Host " $dbserver  #Database $i"}                       
+     
+                for ($k =0; $k -lt $i; $k++){
+                    $return += $checkRepl[$k]
+                }
+                           
+            } else {
+                If($debug){Write-Host " $dbserver  #database  0"}
+            }
+        } catch {
+        # do nothing
+            If($debug){Write-Host " server $dbserver unable to connect  "}
+            continue    
+        }
+
+    }
+} catch {
+    If($debug){Write-Host "Read-Servers Error "} #>>"D:\Replication_MAP\Error_log_SQL_JOBNew.txt"
+    $ex = $_.Exception 
+    If($debug){Write-Host "$ex.Message" }
+    continue 
+} finally {
+    [string[]]$body = $null
+    if($return){
+        $body += $($return|Select-Object 'replica_server_name','database_name','role_desc','connected_state_desc','Replica_health','synchronization_state_desc','Database_health','Is_suspended','is_failover_ready' ,'is_pending_secondary_suspend','is_database_joined'| ConvertTo-HTML| foreach {if($_ -like "<title>*</title>"){'<style>table{color:black;text-align:left;font-size:12px;border:2px solid black;border-collapse: collapse;}th{background-color:cornflowerblue;border:2px solid black;padding:5px;}td{border-right:2px solid black;padding:5px;border-top: 1px solid black;}</style>'}else{$_}})
+         
+        $fromaddress = "DBASupport@swbc.com" 
+        $toaddress = "fkassa@swbc.com;"  
+        $Subject = "Always on availability Group Replica and databases status" 
+        $smtpserver = "smtp.swbc.local" 
+ 
+        #################################### 
+ 
+        $message = new-object System.Net.Mail.MailMessage 
+        $message.From = $fromaddress 
+        $message.To.Add($toaddress) 
+        $message.IsBodyHtml = $True 
+        $message.Subject = $Subject 
+        $message.body = $body 
+        $smtp = new-object Net.Mail.SmtpClient($smtpserver) 
+        $smtp.Send($message) 
+        $servercmd.Dispose()
+        $servercon.Dispose()
+    }
+}
+
+# $return |ft

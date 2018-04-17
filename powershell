@@ -1,0 +1,291 @@
+
+#Set-ExecutionPolicy -ExecutionPolicy RemoteSigned
+
+#Import-Module sqlps -DisableNameChecking;
+#Get-Module
+
+
+function Out-DataTable 
+{ 
+    [CmdletBinding()] 
+    param(
+		[Parameter(Position=0, Mandatory=$true, ValueFromPipeline = $true)] [PSObject[]]$InputObject,
+		[string]$TypeFilter
+	)
+ 
+    Begin 
+    { 
+        $dt = new-object Data.DataTable   
+        $First = $true  
+		$count = 0
+    } 
+    Process 
+    { 
+        foreach ($object in $InputObject) 
+        { 
+			# 2012.10.11 msorens: filter to silence warnings, too.
+			if ($TypeFilter -and $object.GetType().Name -ne $TypeFilter) { continue }
+			
+			# 2012.10.11 msorens: warn about different types instead of throwing exception
+			$count++
+			if ($First) { $firstObjectType = $object.GetType() }
+			elseif ( $object.GetType() -ne $firstObjectType) {
+				Write-Warning ("Skipping {0}th object (type={1}, expected={2})" `
+				-f $count, $object.GetType(), $firstObjectType)
+				continue
+			}
+            $DR = $DT.NewRow()   
+            foreach($property in $object.PsObject.get_properties()) 
+            {   
+                if ($first) 
+                {   
+                    $Col =  new-object Data.DataColumn   
+                    $Col.ColumnName = $property.Name.ToString()   
+                    # 2012.10.11 msorens: Modified test to allow zero to pass; 
+					# otherwise, zero in the first record prevents data type assignment for the column. 
+					$valueExists = Get-Member -InputObject $property -Name value
+					if ($valueExists)
+                    { 
+						# 2012.10.11 msorens: Modified test for nulls to also include $null
+                        #if ($property.value -isnot [System.DBNull] -and $property.value -ne $null) {
+                        #    $Col.DataType = [System.Type]::GetType("$(Get-Type $property.TypeNameOfValue)") 
+                        # } 
+                    } 
+                    $DT.Columns.Add($Col) 
+                }
+                # 2012.10.11 msorens: Changed from .IsArray because, when present, was null;
+				# other times caused error (property 'IsArray' not found...).
+                if ($property.Value -is [array]) {
+                    $DR.Item($property.Name) = $property.value | ConvertTo-XML -AS String -NoTypeInformation -Depth 1 
+                }   
+                # 2012.10.11 msorens: Added support for XML fields
+                elseif ($property.Value -is [System.Xml.XmlElement]) {
+					$DR.Item($property.Name) = $property.Value.OuterXml
+				}
+                else { 
+                    $DR.Item($property.Name) = $property.value 
+                } 
+            }   
+            $DT.Rows.Add($DR)   
+            $First = $false 
+        } 
+    }  
+      
+    End 
+    { 
+        Write-Output @(,($dt)) 
+    } 
+ 
+} 
+###############Out-DataTable 
+
+
+function Write-DataTable 
+{ 
+    [CmdletBinding()] 
+    param( 
+    [Parameter(Position=0, Mandatory=$true)] [string]$ServerInstance, 
+    [Parameter(Position=1, Mandatory=$true)] [string]$Database, 
+    [Parameter(Position=2, Mandatory=$true)] [string]$TableName, 
+    [Parameter(Position=3, Mandatory=$true)] $Data, 
+    [Parameter(Position=4, Mandatory=$false)] [string]$Username, 
+    [Parameter(Position=5, Mandatory=$false)] [string]$Password, 
+    [Parameter(Position=6, Mandatory=$false)] [Int32]$BatchSize=50000, 
+    [Parameter(Position=7, Mandatory=$false)] [Int32]$QueryTimeout=0, 
+    [Parameter(Position=8, Mandatory=$false)] [Int32]$ConnectionTimeout=15 
+    ) 
+     
+    $conn=new-object System.Data.SqlClient.SQLConnection 
+ 
+    if ($Username) 
+    { $ConnectionString = "Server={0};Database={1};User ID={2};Password={3};Trusted_Connection=False;Connect Timeout={4}" -f $ServerInstance,$Database,$Username,$Password,$ConnectionTimeout } 
+    else 
+    { $ConnectionString = "Server={0};Database={1};Integrated Security=True;Connect Timeout={2}" -f $ServerInstance,$Database,$ConnectionTimeout } 
+ 
+    $conn.ConnectionString=$ConnectionString 
+ 
+    try 
+    { 
+        $conn.Open() 
+        $bulkCopy = new-object ("Data.SqlClient.SqlBulkCopy") $connectionString 
+        $bulkCopy.DestinationTableName = $tableName 
+        $bulkCopy.BatchSize = $BatchSize 
+        $bulkCopy.BulkCopyTimeout = $QueryTimeOut 
+        $bulkCopy.WriteToServer($Data) 
+        $conn.Close() 
+    } 
+    catch 
+    { 
+        $ex = $_.Exception 
+        Write-Error "$ex.Message" 
+        continue 
+    } 
+ 
+} 
+#Write-DataTable -----------------------
+
+
+function get-db_Server_config
+{
+[cmdletbinding()]
+
+param(
+[parameter(Mandatory=$true)][string]$dbserver 
+)
+process {
+#Load the SMO object
+[System.Reflection.Assembly]::LoadWithPartialName("Microsoft.SqlServer.SMO")|Out-Null
+Try {
+
+$SQLobj =$null
+$SQLobj =new-object ("Microsoft.SqlServer.Management.Smo.Server") $dbserver
+$SQLobj.ConnectionContext.connect()
+
+#$SQLobj| Export-Csv -Path C:\backups\xx12.csv
+
+Write-Host "Processors $dbserver"
+
+    if($SQLobj.information.IsHadrEnabled){
+     import-Module FailoverClusters 
+     $fileshare =Get-ClusterResource –cluster $SQLobj.ClusterName | Get-ClusterParameter | where-object Name -eq "SharePath" 
+    }
+
+$objectProperties = [ordered]@{
+'Sqlserver' = $dbserver;
+'InstanceName' =  $SQLobj.InstanceName
+'IsHadrEnabled' =  $SQLobj.information.IsHadrEnabled
+'IsClustered' =  $SQLobj.information.IsClustered
+'ClusterName' = $SQLobj.ClusterName;
+'ClusterQuorumState' = $SQLobj.ClusterQuorumState;
+'ClusterQuorumType' = $SQLobj.ClusterQuorumType;
+'HadrManagerStatus' = $SQLobj.HadrManagerStatus;
+
+'File Share Witness' =$fileshare.value
+
+'NumaNodesCORE'    =$SQLobj.AffinityInfo.NumaNodes.Count
+'NumberofCPU' =  $SQLobj.information.Processors
+
+'PhysicalMemory' = $SQLobj.information.physicalMemory;
+'MaxSQLMemory' = $SQLobj.configuration.maxServerMemory.configvalue;
+'MinSQLMemory' = $SQLobj.configuration.minServerMemory.configvalue;
+'PhysicalMemoryUsageInKB' = $SQLobj.PhysicalMemoryUsageInKB;
+
+'Product' = $SQLobj.information.Product;
+'Edition' = $SQLobj.information.Edition;
+'VersionString' = $SQLobj.information.VersionString;
+'ProductLevel' = $SQLobj.information.ProductLevel;
+'LoginMode' = $SQLobj.LoginMode;
+'IsCaseSensitive' = $SQLobj.information.IsCaseSensitive;
+'Platform' = $SQLobj.information.Platform;
+'EngineEdition' = $SQLobj.information.EngineEdition;
+'Status' = $SQLobj.Status;
+'MasterDBPath' = $SQLobj.MasterDBPath;
+'MasterDBLogPath' = $SQLobj.MasterDBLogPath;
+'DefaultFile' = $SQLobj.DefaultFile;
+'DefaultLog' = $SQLobj.DefaultLog;
+'ErrorLogPath' = $SQLobj.ErrorLogPath;
+'BackupDirectory' = $SQLobj.BackupDirectory;
+'ServiceStartMode'=$SQLobj.ServiceStartMode;
+'ServiceName'=$SQLobj.ServiceName;
+'ServiceAccount'=$SQLobj.ServiceAccount;
+'ServerType'=$SQLobj.ServerType;
+'AuditLevel' = $SQLobj.AuditLevel;
+
+} #end of property 
+
+
+$servermemconfig= New-Object psobject -Property $objectProperties
+#$servermemconfig 
+
+$dt= $servermemconfig |Out-DataTable
+
+  
+  #$dt
+  if ( $dt) {
+   Write-host for "write to -database   $dbserver"
+
+      Write-DataTable -ServerInstance "P-DBAU1" –Database DBAutil –TableName "db_Server_config3" -Data  $dt
+
+    }
+  }
+  catch
+  {
+   Write-Host -ForegroundColor Red -BackgroundColor DarkBlue "Errore: write to -database or connect to   $dbserver"
+             $ex = $_.Exception 
+          Write-Error "$ex.Message" 
+         # continue 
+  }
+ }
+
+}
+
+<#$dbservers =@("d-db1-v","b-dbdam1-v","d-dbutil3","d-dbutil3\sql2016")
+[array]$results=$null
+foreach ($dbserver in $dbservers){
+  $Results=  get-db_Server_config -dbserver $dbserver 
+  $Results |Format-list
+}
+
+#>
+           
+
+        $servercon = New-Object System.Data.SqlClient.SqlConnection
+        $servercon.ConnectionString = "Data Source=P-DBAU1-V;Initial Catalog=master;Integrated Security=true;"
+        $servercmd = New-Object System.Data.SqlClient.SqlCommand
+        $servercmd.Connection = $servercon
+        $servercmd.CommandText = "SELECT distinct  vw.[InstanceName] FROM [DBA].[dbo].[view_SQLServerInstances] vw
+                                  where vw.Started ='True'	
+                                  AND vw.[StartMode] !='Disabled'
+                                  AND vw.State ='Running'
+                                  --and vw.Environment='Beta'
+                                  --and  vw.ServerName ='Q-DBEVOQ1'
+                                  and vw.ServerName not  in  (
+                                                   SELECT   dc.[Decom_servers]
+                                                  FROM [DBAutil].[dbo].[Decommission_server_List] dc)
+                                                  Order by  vw.[InstanceName];
+                               "
+        #$servercmd.CommandText = "SELECT InstanceName FROM DBA.dbo.view_SQLServerInstances where Environment = 'Dev' AND Environment !='QA' AND State = 'Running'"
+        $servercmd.CommandTimeout = 0
+        
+      # Write-Warning $servercmd.CommandText
+        try
+        {
+            $servercon.Open()
+       
+                $read = $servercmd.ExecuteReader()
+    
+            while ($read.Read())
+            {
+            try{
+                $dbserver = $read["InstanceName"]
+
+              Write-Host  " before call db_Server_config for  $dbserver"
+
+              get-db_Server_config -dbserver $dbserver
+              }
+              catch{
+              Write-Host -ForegroundColor Red -BackgroundColor DarkBlue "Read-Servers Error in whille loop $dbserver " 
+            # $ex = $_.Exception 
+            # Write-Error "$ex.Message" 
+             continue 
+              }
+
+              }
+        }
+        catch
+        {
+           Write-Host -ForegroundColor Red -BackgroundColor DarkBlue "Read-Servers Error $dbserver " 
+             $ex = $_.Exception 
+          Write-Error "$ex.Message" 
+          continue 
+           # Write-Warning $_
+        }
+        finally
+        {
+            $servercmd.Dispose()
+            $servercon.Dispose()
+        }
+        
+
+
+

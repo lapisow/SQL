@@ -4,7 +4,7 @@
         $return=@()
         
         $servercon = New-Object System.Data.SqlClient.SqlConnection
-        $servercon.ConnectionString = "Data Source=P-DBAU1-V;Initial Catalog=master;Integrated Security=true;"
+        $servercon.ConnectionString = "Data Source=servername;Initial Catalog=master;Integrated Security=true;"
         $servercmd = New-Object System.Data.SqlClient.SqlCommand
         $servercmd.Connection = $servercon
         #$servercmd.CommandText = "SELECT top 10 InstanceName FROM DBA.dbo.view_SQLServerInstances where Environment ='QA' AND State = 'Running'"
@@ -62,9 +62,9 @@
                       }
                       catch {
                        # do nothing
-                       $ps= New-PSSession -ComputerName  "SWBC-EFTPROD01"
+                       $ps= New-PSSession -ComputerName  "xxxxxxxx"
                        Enter-PSSession -session $ps
-                        $dbserver ="SWBC-EFTPROD01\GLOBALSCAPE"
+                        $dbserver ="servername\GLOBALSCAPE"
                         $sqlcmd= "select @@servername as Servername,create_date, getdate() as checking_date from sys.databases where name = 'tempdb'"
                       $check = Invoke-Sqlcmd -ServerInstance $dbserver -Database tempdb -Query $sqlcmd -ErrorAction Stop -ConnectionTimeout 0
                       $row.instancename =$check.Servername
@@ -97,10 +97,10 @@
         $body += $($return|Select-Object 'InstanceName','startuptime','check_date' | ConvertTo-HTML | foreach {if($_ -like "<title>*</title>"){'<style>table{color:black;text-align:left;font-size:12px;border:2px solid black;border-collapse: collapse;}th{background-color:cornflowerblue;border:2px solid black;padding:5px;}td{border-right:2px solid black;padding:5px;border-top: 1px solid black;}</style>'}else{$_}})
        
            
-        $fromaddress = "fkassa@swbc.com" 
-        $toaddress = "fkassa@swbc.com"  
+        $fromaddress = "fkassa@abc.com" 
+        $toaddress = "fkassa@abc.com"  
         $Subject = "Server Min and Max Memory Configuration" 
-        $smtpserver = "smtp.swbc.local" 
+        $smtpserver = "smtp.abc.local" 
  
         #################################### 
  
